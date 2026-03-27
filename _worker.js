@@ -107,7 +107,7 @@ async function pSB(text) {
     if (cfg[OB]) {
       for (const node of cfg[OB]) {
         if (node.tls) {
-          node.tls.ech = { enabled: true, config: [echPem] };
+          node.tls.ech = { enabled: true, config: echPem };
           const UT = 'ut'+'ls';
           if (!node.tls[UT]) node.tls[UT] = {};
           node.tls[UT].enabled = true;
@@ -646,7 +646,7 @@ export default {
                       const _desireBase = (typeof _desireNode === 'string' ? _desireNode : _desireNode.split('\n')[0]).split('\n')[0];
                       subUrl = `https://${targetSubDomain}/sub?base=${encodeURIComponent(_desireBase)}&token=${encodeURIComponent(_SUB_TOKEN)}`;
                   } else {
-                      subUrl = `https://${targetSubDomain}/sub?uuid=${_UUID}&encryption=none&security=tls&sni=${host}&alpn=h3&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}` + (ECH ? `&ech=${ECH_SNI}` : '');
+                      subUrl = `https://${targetSubDomain}/sub?uuid=${_UUID}&encryption=none&security=tls&sni=${host}&alpn=h3&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}` + (ECH ? `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}` : '');
                   }
                   
                   const subApi = `${converterUrl}/sub?target=${type}&url=${encodeURIComponent(subUrl)}&config=${encodeURIComponent(config)}&emoji=true&list=false&sort=false&fdn=false&scv=false`;
@@ -684,7 +684,7 @@ export default {
                     const _desireBase2 = (typeof _desireNode2 === 'string' ? _desireNode2 : _desireNode2.split('\n')[0]).split('\n')[0];
                     subUrl = `https://${subDomain}/sub?base=${encodeURIComponent(_desireBase2)}&token=${encodeURIComponent(_SUB_TOKEN2)}`;
                 } else {
-                    subUrl = `https://${subDomain}/sub?uuid=${_UUID}&encryption=none&security=tls&sni=${host}&alpn=h3&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}` + (ECH ? `&ech=${ECH_SNI}` : '');
+                    subUrl = `https://${subDomain}/sub?uuid=${_UUID}&encryption=none&security=tls&sni=${host}&alpn=h3&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}` + (ECH ? `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}` : '');
                 }
                 try {
                     const res = await fetch(subUrl, { headers: { 'User-Agent': UA } });
@@ -698,7 +698,34 @@ export default {
             }
 
             if (success) {
-                if (_PS) { try { const decoded = atob(body); const modified = decoded.split('\n').map(line => { line = line.trim(); if (!line || !line.includes('://')) return line; if (line.includes('#')) return line + encodeURIComponent(` ${_PS}`); return line + '#' + encodeURIComponent(_PS); }).join('\n'); body = btoa(modified); } catch(e) {} }
+                try {
+                  let decoded = atob(body);
+                  let lines = decoded.split('\n').map(line => {
+                    line = line.trim();
+                    if (!line || !line.includes('://')) return line;
+                    // ECH 注入：给没有 ech= 参数的节点添加 ECH
+                    if (ECH && !line.includes('&ech=')) {
+                      const echVal = encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS);
+                      const hashIdx = line.indexOf('#');
+                      if (hashIdx > 0) {
+                        line = line.slice(0, hashIdx) + '&ech=' + echVal + line.slice(hashIdx);
+                      } else {
+                        line = line + '&ech=' + echVal;
+                      }
+                    }
+                    // FP 修正：ECH 开启时确保 fp=chrome
+                    if (ECH && line.includes('fp=')) {
+                      line = line.replace(/fp=[^&#]+/, 'fp=' + FP);
+                    }
+                    // PS 后缀
+                    if (_PS) {
+                      if (line.includes('#')) line = line + encodeURIComponent(` ${_PS}`);
+                      else line = line + '#' + encodeURIComponent(_PS);
+                    }
+                    return line;
+                  });
+                  body = btoa(lines.join('\n'));
+                } catch(e) {}
                 return new Response(body, { status: 200, headers: finalHeaders });
             }
           } catch(e) {}
@@ -809,7 +836,8 @@ export default {
       // 🟢 代理入口 - 混淆版
       const { proxyIP, sq, enSq, gp } = parsePC(url.pathname);
       const { 0: c, 1: s } = new WebSocketPair();
-      s.accept(); 
+      s.accept();
+      s.binaryType = 'arraybuffer';
       handle(s, proxyIP, sq, enSq, gp, _UUID); 
       return new Response(null, { status: 101, webSocket: c });
 
@@ -824,7 +852,11 @@ export default {
 // =============================================================================
 
 function genNodes(host, uuid, proxyIP, customIPs, psName) {
-  const commonUrlPart = `?enc`+`ryption=none&secu`+`rity=tls&sni=${host}&fp=${FP}&alpn=h3&type=ws&host=${host}` + (ECH ? `&ech=${ECH_SNI}` : '');
+  let echParam = '';
+  if (ECH) {
+    echParam = `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}`;
+  }
+  const commonUrlPart = `?enc`+`ryption=none&secu`+`rity=tls&sni=${host}&fp=${FP}&alpn=h3&type=ws&host=${host}` + echParam;
   const separator = psName ? ` ${psName}` : '';
   const result = [];
   if (!customIPs || customIPs.length === 0) {
@@ -1075,7 +1107,7 @@ function loginPage(tgGroup, siteUrl, githubUrl, pageTitle) {
 function dashPage(host, uuid, proxyip, subpass, subdomain, converter, env, clientIP, hasAuth, tgState, cfState, add, addApi, addCsv, tgToken, tgId, cfId, cfToken, cfMail, cfKey, sysParams, dashTitle, proxyCheckUrl, dls, echEnabled, echSni, echDns) {
     const defaultSubLink = `https://${host}/${subpass}`;
     const pathParam = proxyip ? "/proxyip=" + proxyip : "/";
-    const longLink = `https://${subdomain}/sub?uuid=${uuid}&encryption=none&security=tls&sni=${host}&alpn=h3&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}` + (ECH ? `&ech=${ECH_SNI}` : '');
+    const longLink = `https://${subdomain}/sub?uuid=${uuid}&encryption=none&security=tls&sni=${host}&alpn=h3&fp=${FP}&allowInsecure=0&type=ws&host=${host}&path=${encodeURIComponent(pathParam)}` + (ECH ? `&ech=${encodeURIComponent((ECH_SNI ? ECH_SNI + '+' : '') + ECH_DNS)}` : '');
     const safeVal = (str) => (str || '').replace(/"/g, '&quot;');
     const jsStr = (s) => JSON.stringify(s || '').slice(1, -1);
     const getStatusLabel = (val, sysVal) => { if (!val) return ""; if (val === sysVal) return `<span class="source-tag sys">🔒 系统预设 (不可删除)</span>`; return `<span class="source-tag man">💾 后台配置 (可清除)</span>`; };
@@ -3103,7 +3135,7 @@ function dashPage(host, uuid, proxyip, subpass, subdomain, converter, env, clien
 
     <script>
         const UUID = "${jsStr(uuid)}"; const CONVERTER = "${jsStr(converter)}"; const CLIENT_IP = "${jsStr(clientIP)}"; const HAS_AUTH = ${hasAuth};
-        const ECH_ON_INIT = ${echEnabled === 'true'}; const ECH_SNI_INIT = "${jsStr(echSni)}";
+        const ECH_ON_INIT = ${echEnabled === 'true'}; const ECH_SNI_INIT = "${jsStr(echSni)}"; const ECH_DNS_INIT = "${jsStr(echDns)}";
         function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
         // 页面加载
@@ -3339,7 +3371,7 @@ function dashPage(host, uuid, proxyip, subpass, subdomain, converter, env, clien
             search.set('type', 'ws');
             search.set('host', host);
             search.set('path', path);
-            if (_echOn) { const _es = document.getElementById('echSni')?.value || 'cloudflare-ech.com'; search.set('ech', _es); }
+            if (_echOn) { const _es = document.getElementById('echSni')?.value || 'cloudflare-ech.com'; const _ed = document.getElementById('echDns')?.value || ECH_DNS_INIT; search.set('ech', (_es ? _es + '+' : '') + _ed); }
             let finalUrl = \`https://\${base}/sub?\${search.toString()}\`;
             if (isCM) {
                 let subUrl = CONVERTER + "/sub?target=" + atob('Y2xhc2g=') + "&url=" + encodeURIComponent(finalUrl) + "&emoji=true&list=false&sort=false";
